@@ -1,0 +1,2920 @@
+# Go Phase 2 — Standard Library & Real-World Development
+### From Fundamentals to Building Real Backend Services
+
+---
+
+> **Prerequisites:** Complete Phase 1. You should be comfortable with structs, interfaces,
+> error handling, goroutines, and channels before starting here.
+>
+> **How to use this book:** Every section builds on the last. Type every example yourself.
+> Complete each week's project before moving on. By the end you will have built a
+> fully functional REST API connected to a real database.
+
+---
+
+## Table of Contents
+
+- [Week 1 — Working with Files & the OS](#week-1--working-with-files--the-os)
+- [Week 2 — JSON, HTTP Client & External APIs](#week-2--json-http-client--external-apis)
+- [Week 3 — Building HTTP Servers](#week-3--building-http-servers)
+- [Week 4 — Databases with database/sql](#week-4--databases-with-databasesql)
+- [Week 5 — Context, Middleware & CLI Tools](#week-5--context-middleware--cli-tools)
+- [Week 6 — Capstone: Full REST API](#week-6--capstone-full-rest-api)
+
+---
+
+# Week 1 — Working with Files & the OS
+
+## 1.1 The `os` Package
+
+The `os` package gives you access to the operating system: files, environment variables,
+command-line arguments, processes, and more.
+
+### Environment Variables
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+)
+
+func main() {
+    // Read an environment variable
+    home := os.Getenv("HOME")
+    fmt.Println("Home:", home)
+
+    // Read with a default fallback
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = "8080"
+    }
+    fmt.Println("Port:", port)
+
+    // Set an environment variable (current process only)
+    os.Setenv("APP_ENV", "development")
+
+    // Get all environment variables
+    for _, env := range os.Environ() {
+        fmt.Println(env) // "KEY=VALUE"
+    }
+
+    // Remove an environment variable
+    os.Unsetenv("APP_ENV")
+}
+```
+
+### Command-Line Arguments
+
+```go
+// os.Args[0] is the program name
+// os.Args[1:] are the arguments
+
+func main() {
+    args := os.Args
+    fmt.Println("Program:", args[0])
+
+    if len(args) < 2 {
+        fmt.Println("Usage: program <name>")
+        os.Exit(1) // exit with non-zero code signals failure
+    }
+
+    fmt.Println("Hello,", args[1])
+}
+```
+
+```bash
+go run main.go Alice
+# Program: /tmp/go-build.../exe/main
+# Hello, Alice
+```
+
+### Working with the Filesystem
+
+```go
+import (
+    "fmt"
+    "os"
+)
+
+func main() {
+    // Get current working directory
+    dir, err := os.Getwd()
+    if err != nil {
+        fmt.Println("Error:", err)
+        return
+    }
+    fmt.Println("CWD:", dir)
+
+    // Create a directory
+    err = os.Mkdir("testdir", 0755)
+    if err != nil {
+        fmt.Println("Error:", err)
+    }
+
+    // Create nested directories (like mkdir -p)
+    err = os.MkdirAll("testdir/sub/deep", 0755)
+    if err != nil {
+        fmt.Println("Error:", err)
+    }
+
+    // Remove a file or empty directory
+    os.Remove("testdir/file.txt")
+
+    // Remove a directory and all its contents (like rm -rf)
+    os.RemoveAll("testdir")
+
+    // Rename or move a file
+    os.Rename("old.txt", "new.txt")
+
+    // Get file info
+    info, err := os.Stat("main.go")
+    if err != nil {
+        if os.IsNotExist(err) {
+            fmt.Println("file does not exist")
+        }
+        return
+    }
+    fmt.Println("Name:", info.Name())
+    fmt.Println("Size:", info.Size(), "bytes")
+    fmt.Println("Modified:", info.ModTime())
+    fmt.Println("Is dir:", info.IsDir())
+}
+```
+
+---
+
+## 1.2 Reading & Writing Files
+
+### Reading an Entire File
+
+```go
+import (
+    "fmt"
+    "os"
+)
+
+func main() {
+    // Read entire file into memory — fine for small files
+    data, err := os.ReadFile("hello.txt")
+    if err != nil {
+        fmt.Println("Error reading file:", err)
+        return
+    }
+    fmt.Println(string(data))
+}
+```
+
+### Writing an Entire File
+
+```go
+func main() {
+    content := []byte("Hello, Go!\nThis is a file.\n")
+
+    // Write file — creates or truncates
+    // 0644 = owner read/write, group read, others read
+    err := os.WriteFile("output.txt", content, 0644)
+    if err != nil {
+        fmt.Println("Error writing file:", err)
+        return
+    }
+    fmt.Println("File written successfully")
+}
+```
+
+### Opening Files for More Control
+
+```go
+import (
+    "fmt"
+    "os"
+)
+
+func main() {
+    // Open for reading
+    f, err := os.Open("data.txt")
+    if err != nil {
+        fmt.Println("Error:", err)
+        return
+    }
+    defer f.Close() // always close
+
+    // Open with flags (create, write, append)
+    f2, err := os.OpenFile("log.txt",
+        os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+        0644,
+    )
+    if err != nil {
+        fmt.Println("Error:", err)
+        return
+    }
+    defer f2.Close()
+
+    f2.WriteString("Log entry\n")
+}
+```
+
+**Common flags:**
+- `os.O_RDONLY` — read only
+- `os.O_WRONLY` — write only
+- `os.O_RDWR` — read and write
+- `os.O_CREATE` — create if not exists
+- `os.O_TRUNC` — truncate to zero when opening
+- `os.O_APPEND` — append to end
+
+---
+
+## 1.3 The `io` Package — Reading & Writing Streams
+
+The `io` package defines the core `Reader` and `Writer` interfaces that everything in Go uses.
+
+```go
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+
+type Writer interface {
+    Write(p []byte) (n int, err error)
+}
+```
+
+Any type that implements `Read` is a `Reader`. Files, HTTP response bodies, strings, byte buffers — they're all readers. This is why the same functions work with all of them.
+
+### io.Copy — Stream from Reader to Writer
+
+```go
+import (
+    "io"
+    "os"
+)
+
+func main() {
+    // Copy a file
+    src, _ := os.Open("source.txt")
+    defer src.Close()
+
+    dst, _ := os.Create("dest.txt")
+    defer dst.Close()
+
+    // io.Copy reads from src and writes to dst in chunks — memory efficient
+    bytesWritten, err := io.Copy(dst, src)
+    if err != nil {
+        fmt.Println("Error:", err)
+        return
+    }
+    fmt.Printf("Copied %d bytes\n", bytesWritten)
+}
+```
+
+### strings.NewReader — Turn a String into a Reader
+
+```go
+import (
+    "io"
+    "os"
+    "strings"
+)
+
+func main() {
+    r := strings.NewReader("Hello from a string reader!\n")
+
+    // Now r implements io.Reader — use it anywhere a reader is expected
+    io.Copy(os.Stdout, r)
+}
+```
+
+### bytes.Buffer — An In-Memory Read/Write Buffer
+
+```go
+import (
+    "bytes"
+    "fmt"
+)
+
+func main() {
+    var buf bytes.Buffer
+
+    // Write to buffer
+    buf.WriteString("Hello, ")
+    buf.WriteString("World!")
+    fmt.Fprintf(&buf, " Count: %d", 42) // Fprintf writes to any Writer
+
+    // Read from buffer
+    fmt.Println(buf.String())   // Hello, World! Count: 42
+    fmt.Println(buf.Len())      // byte length
+}
+```
+
+---
+
+## 1.4 The `bufio` Package — Buffered I/O
+
+Direct `Read`/`Write` calls to files make one syscall per call — expensive. `bufio` wraps a reader/writer with a buffer to batch operations.
+
+### Reading Line by Line
+
+```go
+import (
+    "bufio"
+    "fmt"
+    "os"
+)
+
+func main() {
+    f, err := os.Open("data.txt")
+    if err != nil {
+        fmt.Println("Error:", err)
+        return
+    }
+    defer f.Close()
+
+    scanner := bufio.NewScanner(f)
+
+    lineNum := 0
+    for scanner.Scan() {
+        lineNum++
+        line := scanner.Text()
+        fmt.Printf("%d: %s\n", lineNum, line)
+    }
+
+    if err := scanner.Err(); err != nil {
+        fmt.Println("Scanner error:", err)
+    }
+}
+```
+
+### Reading from Stdin
+
+```go
+func main() {
+    scanner := bufio.NewScanner(os.Stdin)
+    fmt.Print("Enter your name: ")
+
+    if scanner.Scan() {
+        name := scanner.Text()
+        fmt.Println("Hello,", name)
+    }
+}
+```
+
+### Buffered Writing
+
+```go
+import (
+    "bufio"
+    "os"
+)
+
+func main() {
+    f, _ := os.Create("output.txt")
+    defer f.Close()
+
+    // Wraps f — batches small writes into larger ones
+    w := bufio.NewWriter(f)
+
+    for i := 0; i < 1000; i++ {
+        fmt.Fprintf(w, "Line %d\n", i)
+    }
+
+    // IMPORTANT: Flush writes any buffered data to the underlying writer
+    w.Flush()
+}
+```
+
+---
+
+## 1.5 Working with Paths — `path/filepath`
+
+```go
+import (
+    "fmt"
+    "path/filepath"
+)
+
+func main() {
+    // Join path components (handles OS separators)
+    p := filepath.Join("home", "user", "docs", "file.txt")
+    fmt.Println(p) // home/user/docs/file.txt (or home\user\... on Windows)
+
+    // Split into directory and filename
+    dir, file := filepath.Split("/home/user/docs/file.txt")
+    fmt.Println("Dir:", dir)   // /home/user/docs/
+    fmt.Println("File:", file) // file.txt
+
+    // Get just the extension
+    ext := filepath.Ext("photo.jpg")
+    fmt.Println("Ext:", ext) // .jpg
+
+    // Get the base name
+    base := filepath.Base("/home/user/docs/file.txt")
+    fmt.Println("Base:", base) // file.txt
+
+    // Absolute path
+    abs, _ := filepath.Abs("./relative/path")
+    fmt.Println("Abs:", abs)
+
+    // Walk a directory tree
+    filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+        if err != nil {
+            return err
+        }
+        if !info.IsDir() {
+            fmt.Println(path)
+        }
+        return nil
+    })
+}
+```
+
+---
+
+## 1.6 Encoding: CSV & JSON Files
+
+### Reading CSV
+
+```go
+import (
+    "encoding/csv"
+    "fmt"
+    "os"
+)
+
+func main() {
+    f, _ := os.Open("data.csv")
+    defer f.Close()
+
+    reader := csv.NewReader(f)
+
+    // Read all records at once
+    records, err := reader.ReadAll()
+    if err != nil {
+        fmt.Println("Error:", err)
+        return
+    }
+
+    for i, row := range records {
+        fmt.Printf("Row %d: %v\n", i, row)
+    }
+}
+```
+
+### Writing CSV
+
+```go
+func main() {
+    f, _ := os.Create("output.csv")
+    defer f.Close()
+
+    writer := csv.NewWriter(f)
+    defer writer.Flush()
+
+    headers := []string{"Name", "Age", "City"}
+    writer.Write(headers)
+
+    records := [][]string{
+        {"Alice", "30", "New York"},
+        {"Bob", "25", "London"},
+    }
+
+    writer.WriteAll(records) // writes all and flushes
+}
+```
+
+---
+
+## Week 1 — Project
+
+**Log file analyzer**
+
+Build a CLI tool that analyzes a log file and produces a report.
+
+```
+Usage: loganalyzer <logfile>
+```
+
+The log file format (create a sample):
+```
+2024-01-15 10:23:01 ERROR database connection failed
+2024-01-15 10:23:05 INFO  server started on port 8080
+2024-01-15 10:24:12 WARN  high memory usage: 85%
+2024-01-15 10:25:00 ERROR timeout after 30s
+2024-01-15 10:25:01 INFO  retrying connection
+```
+
+Requirements:
+1. Read the log file line by line with `bufio.Scanner`
+2. Parse each line into a struct: `LogEntry{Timestamp, Level, Message}`
+3. Count entries by level (ERROR, WARN, INFO)
+4. Find all ERROR entries and print them separately
+5. Print a summary report to a new file `report.txt`
+6. Handle errors gracefully — if the file doesn't exist, print a clear message
+
+Expected output:
+```
+=== Log Analysis Report ===
+Total entries: 5
+  INFO:  2
+  WARN:  1
+  ERROR: 2
+
+=== Errors Found ===
+[2024-01-15 10:23:01] database connection failed
+[2024-01-15 10:25:00] timeout after 30s
+
+Report written to report.txt
+```
+
+---
+
+---
+
+# Week 2 — JSON, HTTP Client & External APIs
+
+## 2.1 The `encoding/json` Package
+
+JSON is the lingua franca of web APIs. Go's `encoding/json` package handles encoding (Go → JSON) and decoding (JSON → Go).
+
+### Encoding (Marshal)
+
+```go
+import (
+    "encoding/json"
+    "fmt"
+)
+
+type User struct {
+    ID       int    `json:"id"`
+    Name     string `json:"name"`
+    Email    string `json:"email"`
+    Password string `json:"-"`          // excluded from JSON
+    Age      int    `json:"age,omitempty"` // omitted if zero value
+}
+
+func main() {
+    user := User{
+        ID:       1,
+        Name:     "Alice",
+        Email:    "alice@example.com",
+        Password: "secret",
+        Age:      0, // omitempty — will not appear in JSON
+    }
+
+    // Marshal to []byte
+    data, err := json.Marshal(user)
+    if err != nil {
+        fmt.Println("Error:", err)
+        return
+    }
+    fmt.Println(string(data))
+    // {"id":1,"name":"Alice","email":"alice@example.com"}
+
+    // Marshal with indentation (for human readability)
+    pretty, _ := json.MarshalIndent(user, "", "  ")
+    fmt.Println(string(pretty))
+}
+```
+
+**Struct tags explained:**
+- `json:"name"` — use "name" as the JSON key
+- `json:"-"` — always exclude this field
+- `json:"name,omitempty"` — exclude if the field is its zero value
+- `json:"name,string"` — encode as a JSON string even if it's a number
+
+### Decoding (Unmarshal)
+
+```go
+func main() {
+    data := []byte(`{
+        "id": 42,
+        "name": "Bob",
+        "email": "bob@example.com"
+    }`)
+
+    var user User
+    err := json.Unmarshal(data, &user)
+    if err != nil {
+        fmt.Println("Error:", err)
+        return
+    }
+    fmt.Printf("ID: %d, Name: %s\n", user.ID, user.Name)
+}
+```
+
+### Encoding/Decoding with Streams
+
+For HTTP bodies and files, use the streaming encoder/decoder — it doesn't load everything into memory at once:
+
+```go
+import (
+    "encoding/json"
+    "os"
+)
+
+// Write JSON to a file
+func writeJSON(filename string, v any) error {
+    f, err := os.Create(filename)
+    if err != nil {
+        return err
+    }
+    defer f.Close()
+
+    encoder := json.NewEncoder(f)
+    encoder.SetIndent("", "  ")  // pretty print
+    return encoder.Encode(v)
+}
+
+// Read JSON from a file
+func readJSON(filename string, v any) error {
+    f, err := os.Open(filename)
+    if err != nil {
+        return err
+    }
+    defer f.Close()
+
+    return json.NewDecoder(f).Decode(v)
+}
+```
+
+### Working with Unknown JSON — `map` and `json.RawMessage`
+
+```go
+// When you don't know the structure, decode into a map
+func main() {
+    data := []byte(`{"name":"Alice","scores":[95,87,92],"active":true}`)
+
+    var result map[string]any
+    json.Unmarshal(data, &result)
+
+    fmt.Println(result["name"])   // Alice
+    fmt.Println(result["active"]) // true
+
+    // Type assertion needed for nested values
+    scores := result["scores"].([]any)
+    for _, s := range scores {
+        fmt.Println(s.(float64)) // JSON numbers are float64
+    }
+}
+
+// json.RawMessage — delay decoding part of a JSON payload
+type APIResponse struct {
+    Status string          `json:"status"`
+    Data   json.RawMessage `json:"data"` // keep as raw JSON bytes
+}
+
+func decode(body []byte, target any) error {
+    var resp APIResponse
+    if err := json.Unmarshal(body, &resp); err != nil {
+        return err
+    }
+    if resp.Status != "ok" {
+        return fmt.Errorf("API error: %s", resp.Status)
+    }
+    return json.Unmarshal(resp.Data, target)
+}
+```
+
+### Custom JSON Marshaling
+
+Implement `json.Marshaler` and `json.Unmarshaler` for full control:
+
+```go
+import "time"
+
+type Date struct {
+    time.Time
+}
+
+// Custom format when marshaling
+func (d Date) MarshalJSON() ([]byte, error) {
+    return json.Marshal(d.Format("2006-01-02"))
+}
+
+// Custom parsing when unmarshaling
+func (d *Date) UnmarshalJSON(data []byte) error {
+    var s string
+    if err := json.Unmarshal(data, &s); err != nil {
+        return err
+    }
+    t, err := time.Parse("2006-01-02", s)
+    if err != nil {
+        return err
+    }
+    d.Time = t
+    return nil
+}
+
+type Event struct {
+    Name string `json:"name"`
+    Date Date   `json:"date"`
+}
+
+// {"name":"Launch","date":"2024-03-15"}
+```
+
+---
+
+## 2.2 The `net/http` Client
+
+Go's `net/http` package includes both a server and a client. Let's start with the client.
+
+### Simple GET Request
+
+```go
+import (
+    "fmt"
+    "io"
+    "net/http"
+)
+
+func main() {
+    resp, err := http.Get("https://api.github.com/users/golang")
+    if err != nil {
+        fmt.Println("Error:", err)
+        return
+    }
+    defer resp.Body.Close() // ALWAYS close the body
+
+    fmt.Println("Status:", resp.Status)         // 200 OK
+    fmt.Println("Content-Type:", resp.Header.Get("Content-Type"))
+
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        fmt.Println("Error reading body:", err)
+        return
+    }
+    fmt.Println(string(body))
+}
+```
+
+### Decoding JSON Responses
+
+```go
+type GithubUser struct {
+    Login     string `json:"login"`
+    Name      string `json:"name"`
+    Followers int    `json:"followers"`
+    PublicRepos int  `json:"public_repos"`
+}
+
+func getGithubUser(username string) (*GithubUser, error) {
+    url := fmt.Sprintf("https://api.github.com/users/%s", username)
+
+    resp, err := http.Get(url)
+    if err != nil {
+        return nil, fmt.Errorf("request failed: %w", err)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("unexpected status: %s", resp.Status)
+    }
+
+    var user GithubUser
+    if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+        return nil, fmt.Errorf("decode failed: %w", err)
+    }
+
+    return &user, nil
+}
+```
+
+### Using a Custom HTTP Client
+
+The `http.Get` shortcut uses a default client with no timeout. In production, **always** set a timeout:
+
+```go
+client := &http.Client{
+    Timeout: 10 * time.Second,
+}
+
+resp, err := client.Get("https://api.example.com/data")
+```
+
+### POST Request with JSON Body
+
+```go
+type CreateUserRequest struct {
+    Name  string `json:"name"`
+    Email string `json:"email"`
+}
+
+func createUser(client *http.Client, user CreateUserRequest) error {
+    body, err := json.Marshal(user)
+    if err != nil {
+        return err
+    }
+
+    req, err := http.NewRequest("POST", "https://api.example.com/users",
+        bytes.NewReader(body))
+    if err != nil {
+        return err
+    }
+
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Authorization", "Bearer "+os.Getenv("API_TOKEN"))
+
+    resp, err := client.Do(req)
+    if err != nil {
+        return fmt.Errorf("request failed: %w", err)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusCreated {
+        body, _ := io.ReadAll(resp.Body)
+        return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+    }
+
+    return nil
+}
+```
+
+### Building an HTTP Client Wrapper
+
+Wrapping the client avoids repeating headers and base URLs:
+
+```go
+type APIClient struct {
+    baseURL    string
+    httpClient *http.Client
+    token      string
+}
+
+func NewAPIClient(baseURL, token string) *APIClient {
+    return &APIClient{
+        baseURL: baseURL,
+        token:   token,
+        httpClient: &http.Client{
+            Timeout: 15 * time.Second,
+        },
+    }
+}
+
+func (c *APIClient) do(method, path string, body io.Reader) (*http.Response, error) {
+    req, err := http.NewRequest(method, c.baseURL+path, body)
+    if err != nil {
+        return nil, err
+    }
+    req.Header.Set("Authorization", "Bearer "+c.token)
+    req.Header.Set("Content-Type", "application/json")
+    return c.httpClient.Do(req)
+}
+
+func (c *APIClient) Get(path string, out any) error {
+    resp, err := c.do("GET", path, nil)
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+    return json.NewDecoder(resp.Body).Decode(out)
+}
+```
+
+---
+
+## 2.3 URL Building & Query Parameters
+
+```go
+import "net/url"
+
+func buildURL(base, path string, params map[string]string) (string, error) {
+    u, err := url.Parse(base)
+    if err != nil {
+        return "", err
+    }
+
+    u.Path = path
+
+    q := u.Query() // returns url.Values (map[string][]string)
+    for k, v := range params {
+        q.Set(k, v)
+    }
+    u.RawQuery = q.Encode()
+
+    return u.String(), nil
+}
+
+// Usage
+urlStr, _ := buildURL(
+    "https://api.example.com",
+    "/search",
+    map[string]string{
+        "q":     "golang",
+        "limit": "10",
+        "page":  "2",
+    },
+)
+fmt.Println(urlStr)
+// https://api.example.com/search?limit=10&page=2&q=golang
+```
+
+---
+
+## Week 2 — Project
+
+**Weather CLI tool**
+
+Build a command-line tool that fetches weather data from the Open-Meteo API (free, no API key needed).
+
+```
+Usage: weather <city>
+Example: weather London
+```
+
+API:
+- Geocoding: `https://geocoding-api.open-meteo.com/v1/search?name=London&count=1`
+- Weather: `https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.1&current_weather=true`
+
+Requirements:
+1. Accept a city name from `os.Args`
+2. Call the geocoding API to get latitude/longitude — decode the JSON response
+3. Call the weather API with those coordinates
+4. Display: city name, temperature, wind speed, weather condition
+5. Use a custom `*http.Client` with a 10-second timeout
+6. Handle all errors: network failures, city not found, bad status codes
+7. Create response structs with proper JSON tags
+
+Expected output:
+```
+Weather in London, GB
+  Temperature:  12.4°C
+  Wind Speed:   18.2 km/h
+  Condition:    Partly cloudy
+```
+
+---
+
+---
+
+# Week 3 — Building HTTP Servers
+
+## 3.1 The `net/http` Server
+
+Go's standard library includes a production-capable HTTP server. No framework needed for learning.
+
+### Hello World Server
+
+```go
+package main
+
+import (
+    "fmt"
+    "net/http"
+)
+
+func helloHandler(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprintln(w, "Hello, World!")
+}
+
+func main() {
+    http.HandleFunc("/", helloHandler)
+
+    fmt.Println("Server listening on :8080")
+    if err := http.ListenAndServe(":8080", nil); err != nil {
+        fmt.Println("Server error:", err)
+    }
+}
+```
+
+The handler signature is always:
+```go
+func(w http.ResponseWriter, r *http.Request)
+```
+
+- `w http.ResponseWriter` — write your response here (status, headers, body)
+- `r *http.Request` — the incoming request (URL, method, headers, body)
+
+### The Request Object
+
+```go
+func handler(w http.ResponseWriter, r *http.Request) {
+    // Method: GET, POST, PUT, DELETE, etc.
+    fmt.Println("Method:", r.Method)
+
+    // URL path and query
+    fmt.Println("Path:", r.URL.Path)
+    fmt.Println("Query:", r.URL.RawQuery)
+
+    // Query parameters
+    q := r.URL.Query()
+    name := q.Get("name")      // single value
+    tags := q["tag"]           // multiple values for same key
+
+    // Headers
+    contentType := r.Header.Get("Content-Type")
+    auth := r.Header.Get("Authorization")
+
+    // Remote address
+    fmt.Println("Client IP:", r.RemoteAddr)
+}
+```
+
+### Writing Responses
+
+```go
+func handler(w http.ResponseWriter, r *http.Request) {
+    // Set headers BEFORE writing status or body
+    w.Header().Set("Content-Type", "application/json")
+    w.Header().Set("X-Request-ID", "abc123")
+
+    // Write status code — once you write body, status is locked in
+    w.WriteHeader(http.StatusCreated) // 201
+
+    // Write body
+    w.Write([]byte(`{"message":"created"}`))
+}
+
+// Helper: write JSON response
+func writeJSON(w http.ResponseWriter, status int, v any) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(status)
+    json.NewEncoder(w).Encode(v)
+}
+
+// Helper: write JSON error
+func writeError(w http.ResponseWriter, status int, message string) {
+    writeJSON(w, status, map[string]string{"error": message})
+}
+```
+
+### ServeMux — Request Routing
+
+`http.ServeMux` routes incoming requests to handlers based on the URL path.
+
+```go
+func main() {
+    mux := http.NewServeMux()
+
+    // Exact path match
+    mux.HandleFunc("/", homeHandler)
+
+    // Prefix match (trailing slash matches all sub-paths)
+    mux.HandleFunc("/api/", apiHandler)
+
+    // Static files
+    fs := http.FileServer(http.Dir("./static"))
+    mux.Handle("/static/", http.StripPrefix("/static/", fs))
+
+    server := &http.Server{
+        Addr:         ":8080",
+        Handler:      mux,
+        ReadTimeout:  10 * time.Second,
+        WriteTimeout: 10 * time.Second,
+        IdleTimeout:  60 * time.Second,
+    }
+
+    fmt.Println("Listening on :8080")
+    if err := server.ListenAndServe(); err != nil {
+        fmt.Println("Error:", err)
+    }
+}
+```
+
+**Note on Go 1.22 routing:** Go 1.22 added pattern matching to `ServeMux`. If your Go version is 1.22+, you can use:
+
+```go
+mux.HandleFunc("GET /users/{id}", getUserHandler)
+mux.HandleFunc("POST /users", createUserHandler)
+mux.HandleFunc("DELETE /users/{id}", deleteUserHandler)
+
+// Extract path parameters
+func getUserHandler(w http.ResponseWriter, r *http.Request) {
+    id := r.PathValue("id")
+    fmt.Println("User ID:", id)
+}
+```
+
+---
+
+## 3.2 Building a REST API
+
+Let's build a complete REST API for managing a list of books. We will use in-memory storage for now (database comes in Week 4).
+
+### Data Model & Storage
+
+```go
+// models.go
+package main
+
+import (
+    "sync"
+    "time"
+)
+
+type Book struct {
+    ID        int       `json:"id"`
+    Title     string    `json:"title"`
+    Author    string    `json:"author"`
+    Year      int       `json:"year"`
+    CreatedAt time.Time `json:"created_at"`
+}
+
+// In-memory store — thread-safe
+type BookStore struct {
+    mu     sync.RWMutex
+    books  map[int]*Book
+    nextID int
+}
+
+func NewBookStore() *BookStore {
+    return &BookStore{
+        books:  make(map[int]*Book),
+        nextID: 1,
+    }
+}
+
+func (s *BookStore) Create(b *Book) *Book {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    b.ID = s.nextID
+    b.CreatedAt = time.Now()
+    s.books[b.ID] = b
+    s.nextID++
+    return b
+}
+
+func (s *BookStore) GetByID(id int) (*Book, bool) {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+    b, ok := s.books[id]
+    return b, ok
+}
+
+func (s *BookStore) List() []*Book {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+    result := make([]*Book, 0, len(s.books))
+    for _, b := range s.books {
+        result = append(result, b)
+    }
+    return result
+}
+
+func (s *BookStore) Update(id int, updated *Book) (*Book, bool) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    b, ok := s.books[id]
+    if !ok {
+        return nil, false
+    }
+    b.Title = updated.Title
+    b.Author = updated.Author
+    b.Year = updated.Year
+    return b, true
+}
+
+func (s *BookStore) Delete(id int) bool {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    if _, ok := s.books[id]; !ok {
+        return false
+    }
+    delete(s.books, id)
+    return true
+}
+```
+
+### Handlers
+
+```go
+// handlers.go
+package main
+
+import (
+    "encoding/json"
+    "net/http"
+    "strconv"
+    "strings"
+)
+
+type BookHandler struct {
+    store *BookStore
+}
+
+func NewBookHandler(store *BookStore) *BookHandler {
+    return &BookHandler{store: store}
+}
+
+func (h *BookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    // Route: /books or /books/{id}
+    path := strings.TrimPrefix(r.URL.Path, "/books")
+    path = strings.TrimPrefix(path, "/")
+
+    if path == "" {
+        // /books
+        switch r.Method {
+        case http.MethodGet:
+            h.listBooks(w, r)
+        case http.MethodPost:
+            h.createBook(w, r)
+        default:
+            writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+        }
+        return
+    }
+
+    // /books/{id}
+    id, err := strconv.Atoi(path)
+    if err != nil {
+        writeError(w, http.StatusBadRequest, "invalid book ID")
+        return
+    }
+
+    switch r.Method {
+    case http.MethodGet:
+        h.getBook(w, r, id)
+    case http.MethodPut:
+        h.updateBook(w, r, id)
+    case http.MethodDelete:
+        h.deleteBook(w, r, id)
+    default:
+        writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+    }
+}
+
+func (h *BookHandler) listBooks(w http.ResponseWriter, r *http.Request) {
+    books := h.store.List()
+    writeJSON(w, http.StatusOK, books)
+}
+
+func (h *BookHandler) createBook(w http.ResponseWriter, r *http.Request) {
+    var book Book
+    if err := json.NewDecoder(r.Body).Decode(&book); err != nil {
+        writeError(w, http.StatusBadRequest, "invalid request body")
+        return
+    }
+
+    if book.Title == "" || book.Author == "" {
+        writeError(w, http.StatusBadRequest, "title and author are required")
+        return
+    }
+
+    created := h.store.Create(&book)
+    writeJSON(w, http.StatusCreated, created)
+}
+
+func (h *BookHandler) getBook(w http.ResponseWriter, r *http.Request, id int) {
+    book, ok := h.store.GetByID(id)
+    if !ok {
+        writeError(w, http.StatusNotFound, "book not found")
+        return
+    }
+    writeJSON(w, http.StatusOK, book)
+}
+
+func (h *BookHandler) updateBook(w http.ResponseWriter, r *http.Request, id int) {
+    var updated Book
+    if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+        writeError(w, http.StatusBadRequest, "invalid request body")
+        return
+    }
+
+    book, ok := h.store.Update(id, &updated)
+    if !ok {
+        writeError(w, http.StatusNotFound, "book not found")
+        return
+    }
+    writeJSON(w, http.StatusOK, book)
+}
+
+func (h *BookHandler) deleteBook(w http.ResponseWriter, r *http.Request, id int) {
+    if !h.store.Delete(id) {
+        writeError(w, http.StatusNotFound, "book not found")
+        return
+    }
+    w.WriteHeader(http.StatusNoContent) // 204 — success, no body
+}
+```
+
+### Wiring It Together
+
+```go
+// main.go
+func main() {
+    store := NewBookStore()
+    bookHandler := NewBookHandler(store)
+
+    mux := http.NewServeMux()
+    mux.Handle("/books", bookHandler)
+    mux.Handle("/books/", bookHandler)
+
+    server := &http.Server{
+        Addr:         ":8080",
+        Handler:      mux,
+        ReadTimeout:  10 * time.Second,
+        WriteTimeout: 10 * time.Second,
+    }
+
+    fmt.Println("Listening on :8080")
+    server.ListenAndServe()
+}
+```
+
+Test with curl:
+
+```bash
+# Create a book
+curl -X POST http://localhost:8080/books \
+  -H "Content-Type: application/json" \
+  -d '{"title":"The Go Programming Language","author":"Donovan","year":2015}'
+
+# List all books
+curl http://localhost:8080/books
+
+# Get a specific book
+curl http://localhost:8080/books/1
+
+# Update a book
+curl -X PUT http://localhost:8080/books/1 \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Updated Title","author":"Donovan","year":2015}'
+
+# Delete a book
+curl -X DELETE http://localhost:8080/books/1
+```
+
+---
+
+## 3.3 Middleware
+
+Middleware wraps a handler to add behavior — logging, auth, rate limiting, CORS — without cluttering your handler logic.
+
+### The Middleware Pattern
+
+```go
+// A middleware takes a handler and returns a handler
+type Middleware func(http.Handler) http.Handler
+
+// Logging middleware
+func Logger(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+        fmt.Printf("%s %s ", r.Method, r.URL.Path)
+
+        next.ServeHTTP(w, r) // call the next handler
+
+        fmt.Printf("%v\n", time.Since(start))
+    })
+}
+
+// Recovery middleware — catches panics so the server doesn't crash
+func Recovery(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        defer func() {
+            if err := recover(); err != nil {
+                fmt.Printf("panic: %v\n", err)
+                writeError(w, http.StatusInternalServerError, "internal server error")
+            }
+        }()
+        next.ServeHTTP(w, r)
+    })
+}
+
+// Auth middleware — checks for a token
+func RequireAuth(token string) Middleware {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            auth := r.Header.Get("Authorization")
+            if auth != "Bearer "+token {
+                writeError(w, http.StatusUnauthorized, "unauthorized")
+                return
+            }
+            next.ServeHTTP(w, r)
+        })
+    }
+}
+```
+
+### Chaining Middleware
+
+```go
+// Chain applies middleware in order (outermost first)
+func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
+    for i := len(middlewares) - 1; i >= 0; i-- {
+        h = middlewares[i](h)
+    }
+    return h
+}
+
+func main() {
+    store := NewBookStore()
+    bookHandler := NewBookHandler(store)
+
+    mux := http.NewServeMux()
+    mux.Handle("/books", bookHandler)
+    mux.Handle("/books/", bookHandler)
+
+    // Wrap the entire mux with middleware
+    handler := Chain(mux,
+        Recovery,
+        Logger,
+        RequireAuth(os.Getenv("API_TOKEN")),
+    )
+
+    http.ListenAndServe(":8080", handler)
+}
+```
+
+### Capturing Response Status in Middleware
+
+The standard `http.ResponseWriter` doesn't expose the status code after it's been written. Use a wrapper:
+
+```go
+type responseWriter struct {
+    http.ResponseWriter
+    status int
+    size   int
+}
+
+func (rw *responseWriter) WriteHeader(status int) {
+    rw.status = status
+    rw.ResponseWriter.WriteHeader(status)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+    if rw.status == 0 {
+        rw.status = http.StatusOK
+    }
+    n, err := rw.ResponseWriter.Write(b)
+    rw.size += n
+    return n, err
+}
+
+func Logger(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        rw := &responseWriter{ResponseWriter: w}
+        start := time.Now()
+        next.ServeHTTP(rw, r)
+        fmt.Printf("%s %s → %d (%v)\n",
+            r.Method, r.URL.Path, rw.status, time.Since(start))
+    })
+}
+```
+
+---
+
+## Week 3 — Project
+
+**Extend the Books API**
+
+Take the books server from this week and add:
+
+1. **Filtering** — `GET /books?author=Donovan` filters results
+2. **Pagination** — `GET /books?page=1&limit=10`
+3. **Search** — `GET /books?q=programming` searches title and author
+4. **Logging middleware** — log every request: method, path, status code, duration
+5. **Request size limit** — reject requests with body > 1MB
+   (`http.MaxBytesReader(w, r.Body, 1<<20)`)
+6. **CORS middleware** — add `Access-Control-Allow-Origin: *` header
+
+Test everything with curl. Write at least 5 tests for your handlers using `httptest.NewRecorder()`:
+
+```go
+import "net/http/httptest"
+
+func TestListBooks(t *testing.T) {
+    store := NewBookStore()
+    handler := NewBookHandler(store)
+
+    req := httptest.NewRequest("GET", "/books", nil)
+    rr := httptest.NewRecorder()
+
+    handler.ServeHTTP(rr, req)
+
+    if rr.Code != http.StatusOK {
+        t.Errorf("got %d; want %d", rr.Code, http.StatusOK)
+    }
+}
+```
+
+---
+
+---
+
+# Week 4 — Databases with `database/sql`
+
+## 4.1 Setting Up PostgreSQL
+
+Install PostgreSQL and create a database:
+
+```sql
+CREATE DATABASE bookstore;
+\c bookstore
+
+CREATE TABLE books (
+    id         SERIAL PRIMARY KEY,
+    title      TEXT NOT NULL,
+    author     TEXT NOT NULL,
+    year       INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+Install the PostgreSQL driver:
+
+```bash
+go get github.com/lib/pq
+```
+
+---
+
+## 4.2 Connecting to the Database
+
+```go
+import (
+    "database/sql"
+    "fmt"
+    _ "github.com/lib/pq" // blank import — registers the driver
+)
+
+func main() {
+    dsn := "postgres://user:password@localhost:5432/bookstore?sslmode=disable"
+
+    db, err := sql.Open("postgres", dsn)
+    if err != nil {
+        fmt.Println("Error opening:", err)
+        return
+    }
+    defer db.Close()
+
+    // sql.Open doesn't connect — verify with Ping
+    if err := db.Ping(); err != nil {
+        fmt.Println("Error connecting:", err)
+        return
+    }
+
+    fmt.Println("Connected to database")
+
+    // Configure the connection pool
+    db.SetMaxOpenConns(25)
+    db.SetMaxIdleConns(5)
+    db.SetConnMaxLifetime(5 * time.Minute)
+}
+```
+
+**Connection string via environment variable (recommended):**
+
+```go
+dsn := os.Getenv("DATABASE_URL")
+if dsn == "" {
+    dsn = "postgres://postgres:password@localhost:5432/bookstore?sslmode=disable"
+}
+```
+
+---
+
+## 4.3 CRUD Operations
+
+### Querying Multiple Rows
+
+```go
+func (s *Store) ListBooks() ([]Book, error) {
+    rows, err := s.db.Query(
+        "SELECT id, title, author, year, created_at FROM books ORDER BY id",
+    )
+    if err != nil {
+        return nil, fmt.Errorf("listBooks: %w", err)
+    }
+    defer rows.Close() // always close rows
+
+    var books []Book
+    for rows.Next() {
+        var b Book
+        err := rows.Scan(&b.ID, &b.Title, &b.Author, &b.Year, &b.CreatedAt)
+        if err != nil {
+            return nil, fmt.Errorf("listBooks scan: %w", err)
+        }
+        books = append(books, b)
+    }
+
+    // Check for errors that occurred during iteration
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("listBooks rows: %w", err)
+    }
+
+    return books, nil
+}
+```
+
+### Querying a Single Row
+
+```go
+func (s *Store) GetBook(id int) (*Book, error) {
+    var b Book
+    err := s.db.QueryRow(
+        "SELECT id, title, author, year, created_at FROM books WHERE id = $1",
+        id,
+    ).Scan(&b.ID, &b.Title, &b.Author, &b.Year, &b.CreatedAt)
+
+    if err == sql.ErrNoRows {
+        return nil, fmt.Errorf("book %d: %w", id, ErrNotFound)
+    }
+    if err != nil {
+        return nil, fmt.Errorf("getBook: %w", err)
+    }
+
+    return &b, nil
+}
+
+var ErrNotFound = errors.New("not found")
+```
+
+### Inserting Data
+
+```go
+func (s *Store) CreateBook(b *Book) (*Book, error) {
+    err := s.db.QueryRow(
+        `INSERT INTO books (title, author, year)
+         VALUES ($1, $2, $3)
+         RETURNING id, created_at`,
+        b.Title, b.Author, b.Year,
+    ).Scan(&b.ID, &b.CreatedAt)
+
+    if err != nil {
+        return nil, fmt.Errorf("createBook: %w", err)
+    }
+
+    return b, nil
+}
+```
+
+### Updating Data
+
+```go
+func (s *Store) UpdateBook(id int, b *Book) (*Book, error) {
+    result, err := s.db.Exec(
+        `UPDATE books SET title = $1, author = $2, year = $3
+         WHERE id = $4`,
+        b.Title, b.Author, b.Year, id,
+    )
+    if err != nil {
+        return nil, fmt.Errorf("updateBook: %w", err)
+    }
+
+    rows, err := result.RowsAffected()
+    if err != nil {
+        return nil, err
+    }
+    if rows == 0 {
+        return nil, fmt.Errorf("book %d: %w", id, ErrNotFound)
+    }
+
+    b.ID = id
+    return b, nil
+}
+```
+
+### Deleting Data
+
+```go
+func (s *Store) DeleteBook(id int) error {
+    result, err := s.db.Exec("DELETE FROM books WHERE id = $1", id)
+    if err != nil {
+        return fmt.Errorf("deleteBook: %w", err)
+    }
+
+    rows, _ := result.RowsAffected()
+    if rows == 0 {
+        return fmt.Errorf("book %d: %w", id, ErrNotFound)
+    }
+    return nil
+}
+```
+
+---
+
+## 4.4 Transactions
+
+A transaction groups multiple operations — all succeed or all fail.
+
+```go
+func (s *Store) TransferStock(fromID, toID, quantity int) error {
+    // Begin a transaction
+    tx, err := s.db.Begin()
+    if err != nil {
+        return fmt.Errorf("begin transaction: %w", err)
+    }
+
+    // Defer a rollback — if we return early due to error, this runs.
+    // If we commit successfully, Rollback is a no-op.
+    defer tx.Rollback()
+
+    // Deduct from source
+    _, err = tx.Exec(
+        "UPDATE inventory SET quantity = quantity - $1 WHERE id = $2 AND quantity >= $1",
+        quantity, fromID,
+    )
+    if err != nil {
+        return fmt.Errorf("deduct stock: %w", err)
+    }
+
+    // Add to destination
+    _, err = tx.Exec(
+        "UPDATE inventory SET quantity = quantity + $1 WHERE id = $2",
+        quantity, toID,
+    )
+    if err != nil {
+        return fmt.Errorf("add stock: %w", err)
+    }
+
+    // Commit — this is the only success path
+    if err := tx.Commit(); err != nil {
+        return fmt.Errorf("commit: %w", err)
+    }
+
+    return nil
+}
+```
+
+---
+
+## 4.5 Using `sqlx` — A Thin Wrapper
+
+`sqlx` extends `database/sql` with convenience methods. Install:
+
+```bash
+go get github.com/jmoiron/sqlx
+```
+
+```go
+import "github.com/jmoiron/sqlx"
+
+db, err := sqlx.Connect("postgres", dsn)
+
+// Get — scan a single row into a struct automatically
+var book Book
+err = db.Get(&book, "SELECT * FROM books WHERE id = $1", 1)
+
+// Select — scan multiple rows into a slice automatically
+var books []Book
+err = db.Select(&books, "SELECT * FROM books ORDER BY id")
+
+// NamedExec — use struct field names as placeholders
+book := Book{Title: "Go", Author: "Donovan", Year: 2015}
+_, err = db.NamedExec(
+    "INSERT INTO books (title, author, year) VALUES (:title, :author, :year)",
+    book,
+)
+```
+
+For structs to work with `sqlx`, use `db` tags:
+
+```go
+type Book struct {
+    ID        int       `json:"id"        db:"id"`
+    Title     string    `json:"title"     db:"title"`
+    Author    string    `json:"author"    db:"author"`
+    Year      int       `json:"year"      db:"year"`
+    CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+```
+
+---
+
+## 4.6 Database Migrations
+
+Migrations track schema changes in version-controlled files. Use `golang-migrate`:
+
+```bash
+go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+```
+
+Create migration files:
+
+```bash
+migrate create -ext sql -dir migrations -seq create_books_table
+# Creates:
+# migrations/000001_create_books_table.up.sql
+# migrations/000001_create_books_table.down.sql
+```
+
+```sql
+-- migrations/000001_create_books_table.up.sql
+CREATE TABLE books (
+    id         SERIAL PRIMARY KEY,
+    title      TEXT NOT NULL,
+    author     TEXT NOT NULL,
+    year       INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- migrations/000001_create_books_table.down.sql
+DROP TABLE IF EXISTS books;
+```
+
+Run migrations:
+
+```bash
+migrate -path migrations -database "$DATABASE_URL" up
+migrate -path migrations -database "$DATABASE_URL" down 1
+```
+
+Run migrations from Go code:
+
+```go
+import "github.com/golang-migrate/migrate/v4"
+
+func runMigrations(dsn string) error {
+    m, err := migrate.New("file://migrations", dsn)
+    if err != nil {
+        return err
+    }
+    if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+        return err
+    }
+    return nil
+}
+```
+
+---
+
+## Week 4 — Project
+
+**Connect the Books API to PostgreSQL**
+
+Take the Week 3 API and replace the in-memory store with a real PostgreSQL database.
+
+Requirements:
+1. Create a `Store` struct wrapping `*sql.DB` (or `*sqlx.DB`)
+2. Implement all CRUD operations using SQL
+3. Use `$1`, `$2` placeholders (not string formatting — SQL injection risk)
+4. Handle `sql.ErrNoRows` and return a proper 404 response
+5. Create a migration file for the books table
+6. Load database URL from `DATABASE_URL` environment variable
+7. Add `db` struct tags if using `sqlx`
+8. Test: write integration tests that use a real test database
+
+Bonus:
+- Add a `GET /books?year=2015` filter using a WHERE clause
+- Add a `GET /books/search?q=golang` using `ILIKE '%query%'`
+
+---
+
+---
+
+# Week 5 — Context, Middleware & CLI Tools
+
+## 5.1 The `context` Package
+
+`context` carries deadlines, cancellation signals, and request-scoped values across API boundaries. It is the standard way to handle timeouts and cancellation in Go.
+
+### Context Basics
+
+```go
+import "context"
+
+// Background — the root context, never cancelled
+ctx := context.Background()
+
+// TODO — placeholder when you're not sure which context to use yet
+ctx := context.TODO()
+
+// With timeout — auto-cancels after duration
+ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+defer cancel() // always call cancel to free resources
+
+// With deadline — cancels at a specific time
+deadline := time.Now().Add(10 * time.Second)
+ctx, cancel := context.WithDeadline(ctx, deadline)
+defer cancel()
+
+// With cancel — manual cancellation
+ctx, cancel := context.WithCancel(ctx)
+defer cancel()
+go func() {
+    time.Sleep(3 * time.Second)
+    cancel() // cancel from anywhere
+}()
+
+// Check if context is done
+select {
+case <-ctx.Done():
+    fmt.Println("context cancelled:", ctx.Err())
+default:
+    fmt.Println("still running")
+}
+```
+
+### Context with HTTP Requests
+
+```go
+func fetchData(ctx context.Context, url string) ([]byte, error) {
+    req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+    if err != nil {
+        return nil, err
+    }
+
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil {
+        // If context was cancelled, err wraps context.DeadlineExceeded
+        return nil, fmt.Errorf("fetch failed: %w", err)
+    }
+    defer resp.Body.Close()
+
+    return io.ReadAll(resp.Body)
+}
+
+func main() {
+    ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+    defer cancel()
+
+    data, err := fetchData(ctx, "https://api.example.com/data")
+    if err != nil {
+        if errors.Is(err, context.DeadlineExceeded) {
+            fmt.Println("Request timed out")
+        } else {
+            fmt.Println("Error:", err)
+        }
+        return
+    }
+    fmt.Println(string(data))
+}
+```
+
+### Context in HTTP Handlers
+
+Every `http.Request` carries a context. Use it to propagate cancellation to your database queries and downstream calls:
+
+```go
+func (h *BookHandler) getBook(w http.ResponseWriter, r *http.Request) {
+    ctx := r.Context() // get context from request
+
+    id, _ := strconv.Atoi(r.PathValue("id"))
+
+    // Pass context to store — if client disconnects, query is cancelled
+    book, err := h.store.GetBook(ctx, id)
+    if errors.Is(err, context.Canceled) {
+        return // client disconnected, no need to respond
+    }
+    if errors.Is(err, ErrNotFound) {
+        writeError(w, http.StatusNotFound, "book not found")
+        return
+    }
+    if err != nil {
+        writeError(w, http.StatusInternalServerError, "database error")
+        return
+    }
+
+    writeJSON(w, http.StatusOK, book)
+}
+
+// Store method accepts context
+func (s *Store) GetBook(ctx context.Context, id int) (*Book, error) {
+    var b Book
+    err := s.db.QueryRowContext(ctx,
+        "SELECT id, title, author, year FROM books WHERE id = $1", id,
+    ).Scan(&b.ID, &b.Title, &b.Author, &b.Year)
+
+    if err == sql.ErrNoRows {
+        return nil, ErrNotFound
+    }
+    return &b, err
+}
+```
+
+**Rule:** Always pass `context.Context` as the first parameter of any function that does I/O (database, HTTP, file). Never store a context in a struct.
+
+### Context Values
+
+Store request-scoped data (user ID from auth, request ID for logging):
+
+```go
+// Use unexported key type to avoid collisions
+type contextKey string
+
+const userIDKey contextKey = "userID"
+
+// Set a value
+func withUserID(ctx context.Context, id int) context.Context {
+    return context.WithValue(ctx, userIDKey, id)
+}
+
+// Get a value
+func getUserID(ctx context.Context) (int, bool) {
+    id, ok := ctx.Value(userIDKey).(int)
+    return id, ok
+}
+
+// In auth middleware
+func AuthMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        userID := validateToken(r.Header.Get("Authorization"))
+        if userID == 0 {
+            writeError(w, http.StatusUnauthorized, "unauthorized")
+            return
+        }
+        ctx := withUserID(r.Context(), userID)
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+
+// In handler
+func (h *Handler) getProfile(w http.ResponseWriter, r *http.Request) {
+    userID, ok := getUserID(r.Context())
+    if !ok {
+        writeError(w, http.StatusUnauthorized, "unauthorized")
+        return
+    }
+    // use userID...
+}
+```
+
+---
+
+## 5.2 Structured Logging with `log/slog`
+
+Go 1.21 introduced `log/slog` — structured, leveled logging in the standard library.
+
+```go
+import "log/slog"
+
+func main() {
+    // Default logger — outputs to stderr
+    slog.Info("server started", "port", 8080)
+    slog.Warn("high memory", "usage_pct", 85)
+    slog.Error("database error", "err", err, "query", "SELECT...")
+
+    // JSON logger — great for production/log aggregation
+    logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+        Level: slog.LevelInfo,
+    }))
+    slog.SetDefault(logger)
+
+    // Now slog.Info, slog.Error etc. use this logger
+    slog.Info("request received",
+        "method", "GET",
+        "path", "/books",
+        "status", 200,
+        "latency_ms", 12,
+    )
+    // {"time":"2024-01-15T10:23:01Z","level":"INFO","msg":"request received","method":"GET","path":"/books","status":200,"latency_ms":12}
+
+    // With a request ID
+    logger.With("request_id", "abc-123").Info("processing request")
+}
+```
+
+### Logging Middleware with slog
+
+```go
+func LoggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            rw := &responseWriter{ResponseWriter: w}
+            start := time.Now()
+
+            next.ServeHTTP(rw, r)
+
+            logger.Info("request",
+                "method", r.Method,
+                "path", r.URL.Path,
+                "status", rw.status,
+                "latency_ms", time.Since(start).Milliseconds(),
+                "ip", r.RemoteAddr,
+            )
+        })
+    }
+}
+```
+
+---
+
+## 5.3 Configuration Management
+
+Never hardcode configuration. Load it from environment variables at startup.
+
+```go
+type Config struct {
+    // Server
+    Port         string
+    ReadTimeout  time.Duration
+    WriteTimeout time.Duration
+
+    // Database
+    DatabaseURL string
+
+    // Auth
+    JWTSecret string
+    APIToken  string
+}
+
+func LoadConfig() (*Config, error) {
+    cfg := &Config{
+        Port:         getEnv("PORT", "8080"),
+        DatabaseURL:  getEnv("DATABASE_URL", "postgres://localhost/myapp?sslmode=disable"),
+        JWTSecret:    getEnv("JWT_SECRET", ""),
+        APIToken:     getEnv("API_TOKEN", ""),
+        ReadTimeout:  getDurationEnv("READ_TIMEOUT", 10*time.Second),
+        WriteTimeout: getDurationEnv("WRITE_TIMEOUT", 10*time.Second),
+    }
+
+    // Validate required fields
+    if cfg.JWTSecret == "" {
+        return nil, errors.New("JWT_SECRET is required")
+    }
+
+    return cfg, nil
+}
+
+func getEnv(key, fallback string) string {
+    if v := os.Getenv(key); v != "" {
+        return v
+    }
+    return fallback
+}
+
+func getDurationEnv(key string, fallback time.Duration) time.Duration {
+    v := os.Getenv(key)
+    if v == "" {
+        return fallback
+    }
+    d, err := time.ParseDuration(v)
+    if err != nil {
+        return fallback
+    }
+    return d
+}
+```
+
+Use a `.env` file for local development with the `godotenv` package:
+
+```bash
+go get github.com/joho/godotenv
+```
+
+```go
+import "github.com/joho/godotenv"
+
+func main() {
+    // Load .env file if it exists (ignore error in production)
+    _ = godotenv.Load()
+
+    cfg, err := LoadConfig()
+    // ...
+}
+```
+
+`.env` file:
+```
+PORT=8080
+DATABASE_URL=postgres://postgres:password@localhost:5432/bookstore?sslmode=disable
+JWT_SECRET=supersecretkey
+```
+
+---
+
+## 5.4 Building CLI Tools with `flag`
+
+The `flag` package parses command-line flags.
+
+```go
+import "flag"
+
+func main() {
+    // Define flags
+    port := flag.Int("port", 8080, "server port")
+    host := flag.String("host", "localhost", "server host")
+    verbose := flag.Bool("verbose", false, "enable verbose output")
+    timeout := flag.Duration("timeout", 30*time.Second, "request timeout")
+
+    // Parse — must call before using any flag values
+    flag.Parse()
+
+    // Remaining non-flag arguments
+    args := flag.Args()
+
+    fmt.Printf("Starting on %s:%d (verbose=%v, timeout=%v)\n",
+        *host, *port, *verbose, *timeout)
+    fmt.Println("Extra args:", args)
+}
+```
+
+```bash
+go run main.go -port 9090 -verbose -timeout 10s file1.txt file2.txt
+```
+
+### Subcommands
+
+For tools with multiple commands (like `git commit`, `git push`):
+
+```go
+func main() {
+    // Define subcommands
+    serveCmd := flag.NewFlagSet("serve", flag.ExitOnError)
+    servePort := serveCmd.Int("port", 8080, "port to listen on")
+
+    migrateCmd := flag.NewFlagSet("migrate", flag.ExitOnError)
+    migrateDir := migrateCmd.String("dir", "migrations", "migrations directory")
+
+    if len(os.Args) < 2 {
+        fmt.Println("Usage: app <command> [flags]")
+        fmt.Println("Commands: serve, migrate")
+        os.Exit(1)
+    }
+
+    switch os.Args[1] {
+    case "serve":
+        serveCmd.Parse(os.Args[2:])
+        runServer(*servePort)
+
+    case "migrate":
+        migrateCmd.Parse(os.Args[2:])
+        runMigrations(*migrateDir)
+
+    default:
+        fmt.Printf("Unknown command: %s\n", os.Args[1])
+        os.Exit(1)
+    }
+}
+```
+
+```bash
+go run main.go serve -port 9090
+go run main.go migrate -dir ./db/migrations
+```
+
+---
+
+## 5.5 Graceful Shutdown
+
+When a server receives SIGTERM (from Docker, Kubernetes, or Ctrl+C), it should:
+1. Stop accepting new connections
+2. Finish in-flight requests
+3. Close database connections
+4. Exit
+
+```go
+import (
+    "context"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+)
+
+func main() {
+    db := connectDB()
+    defer db.Close()
+
+    mux := http.NewServeMux()
+    // ... register handlers
+
+    server := &http.Server{
+        Addr:    ":8080",
+        Handler: mux,
+    }
+
+    // Start server in background goroutine
+    go func() {
+        fmt.Println("Server listening on :8080")
+        if err := server.ListenAndServe(); err != http.ErrServerClosed {
+            fmt.Println("Server error:", err)
+            os.Exit(1)
+        }
+    }()
+
+    // Wait for interrupt signal
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit // block until signal received
+
+    fmt.Println("Shutting down...")
+
+    // Give in-flight requests 30 seconds to complete
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    if err := server.Shutdown(ctx); err != nil {
+        fmt.Println("Forced shutdown:", err)
+    }
+
+    fmt.Println("Server stopped")
+}
+```
+
+---
+
+## Week 5 — Project
+
+**CLI database migration tool**
+
+Build a CLI tool that manages database migrations.
+
+```
+Usage:
+  migrate up              Run all pending migrations
+  migrate down [n]        Roll back n migrations (default: 1)
+  migrate status          Show which migrations have run
+  migrate create <name>   Create a new migration file pair
+```
+
+Requirements:
+1. Subcommand routing with `flag.FlagSet`
+2. Load `DATABASE_URL` from environment (with `.env` support)
+3. A `migrations` table in the database to track which have run
+4. Read `.sql` files from a `migrations/` directory
+5. `up` runs all unapplied migrations in order
+6. `down` rolls back the last applied migration
+7. `status` prints a table of all migrations and their status
+8. `create` generates `{timestamp}_{name}.up.sql` and `.down.sql` files
+
+This is the kind of tool you will use in the capstone project.
+
+---
+
+---
+
+# Week 6 — Capstone: Full REST API
+
+## 6.1 Project Overview
+
+You will build **BookStore API** — a complete REST API for a book ecommerce store backend. This connects everything from Phase 2: HTTP server, JSON, PostgreSQL, context, middleware, configuration, and graceful shutdown.
+
+### Features
+
+- User registration and login (JWT authentication)
+- CRUD for books with author and category
+- Search and filter books
+- Order creation and management
+- Structured logging on every request
+- Graceful shutdown
+
+---
+
+## 6.2 Project Structure
+
+```
+bookstore-api/
+├── .env
+├── .env.example
+├── go.mod
+├── go.sum
+├── main.go
+├── migrations/
+│   ├── 000001_create_users.up.sql
+│   ├── 000001_create_users.down.sql
+│   ├── 000002_create_books.up.sql
+│   └── 000002_create_books.down.sql
+├── internal/
+│   ├── config/
+│   │   └── config.go
+│   ├── db/
+│   │   └── db.go
+│   ├── middleware/
+│   │   ├── auth.go
+│   │   ├── logger.go
+│   │   └── recovery.go
+│   ├── handler/
+│   │   ├── book.go
+│   │   ├── user.go
+│   │   └── order.go
+│   ├── store/
+│   │   ├── book.go
+│   │   ├── user.go
+│   │   └── order.go
+│   └── model/
+│       ├── book.go
+│       ├── user.go
+│       └── order.go
+└── pkg/
+    └── jwt/
+        └── jwt.go
+```
+
+---
+
+## 6.3 Database Schema
+
+```sql
+-- migrations/000001_create_users.up.sql
+CREATE TABLE users (
+    id            SERIAL PRIMARY KEY,
+    email         TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- migrations/000002_create_books.up.sql
+CREATE TABLE books (
+    id          SERIAL PRIMARY KEY,
+    title       TEXT NOT NULL,
+    author      TEXT NOT NULL,
+    description TEXT,
+    price       NUMERIC(10,2) NOT NULL,
+    stock       INTEGER NOT NULL DEFAULT 0,
+    year        INTEGER,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_books_author ON books(author);
+CREATE INDEX idx_books_title  ON books USING gin(to_tsvector('english', title));
+
+-- migrations/000003_create_orders.up.sql
+CREATE TABLE orders (
+    id         SERIAL PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id),
+    total      NUMERIC(10,2) NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE order_items (
+    id       SERIAL PRIMARY KEY,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    book_id  INTEGER NOT NULL REFERENCES books(id),
+    quantity INTEGER NOT NULL,
+    price    NUMERIC(10,2) NOT NULL
+);
+```
+
+---
+
+## 6.4 Core Components
+
+### Models
+
+```go
+// internal/model/user.go
+package model
+
+import "time"
+
+type User struct {
+    ID           int       `json:"id"         db:"id"`
+    Email        string    `json:"email"      db:"email"`
+    PasswordHash string    `json:"-"          db:"password_hash"`
+    Name         string    `json:"name"       db:"name"`
+    CreatedAt    time.Time `json:"created_at" db:"created_at"`
+}
+
+type RegisterRequest struct {
+    Email    string `json:"email"`
+    Password string `json:"password"`
+    Name     string `json:"name"`
+}
+
+type LoginRequest struct {
+    Email    string `json:"email"`
+    Password string `json:"password"`
+}
+
+type LoginResponse struct {
+    Token string `json:"token"`
+    User  *User  `json:"user"`
+}
+```
+
+```go
+// internal/model/book.go
+package model
+
+type Book struct {
+    ID          int     `json:"id"          db:"id"`
+    Title       string  `json:"title"       db:"title"`
+    Author      string  `json:"author"      db:"author"`
+    Description string  `json:"description" db:"description"`
+    Price       float64 `json:"price"       db:"price"`
+    Stock       int     `json:"stock"       db:"stock"`
+    Year        int     `json:"year"        db:"year"`
+}
+
+type BookFilter struct {
+    Search string
+    Author string
+    MinPrice float64
+    MaxPrice float64
+    Page     int
+    Limit    int
+}
+```
+
+### JWT Package
+
+```go
+// pkg/jwt/jwt.go
+package jwt
+
+import (
+    "errors"
+    "time"
+    "github.com/golang-jwt/jwt/v5"
+)
+
+var ErrInvalidToken = errors.New("invalid token")
+
+type Claims struct {
+    UserID int `json:"user_id"`
+    jwt.RegisteredClaims
+}
+
+func Generate(userID int, secret string, expiry time.Duration) (string, error) {
+    claims := Claims{
+        UserID: userID,
+        RegisteredClaims: jwt.RegisteredClaims{
+            ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
+            IssuedAt:  jwt.NewNumericDate(time.Now()),
+        },
+    }
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+    return token.SignedString([]byte(secret))
+}
+
+func Validate(tokenStr, secret string) (*Claims, error) {
+    token, err := jwt.ParseWithClaims(tokenStr, &Claims{},
+        func(t *jwt.Token) (any, error) {
+            if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+                return nil, ErrInvalidToken
+            }
+            return []byte(secret), nil
+        },
+    )
+    if err != nil || !token.Valid {
+        return nil, ErrInvalidToken
+    }
+    claims, ok := token.Claims.(*Claims)
+    if !ok {
+        return nil, ErrInvalidToken
+    }
+    return claims, nil
+}
+```
+
+### User Store
+
+```go
+// internal/store/user.go
+package store
+
+import (
+    "context"
+    "database/sql"
+
+    "golang.org/x/crypto/bcrypt"
+    "github.com/yourname/bookstore/internal/model"
+)
+
+type UserStore struct {
+    db *sql.DB
+}
+
+func NewUserStore(db *sql.DB) *UserStore {
+    return &UserStore{db: db}
+}
+
+func (s *UserStore) Create(ctx context.Context, req model.RegisterRequest) (*model.User, error) {
+    hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+    if err != nil {
+        return nil, err
+    }
+
+    var user model.User
+    err = s.db.QueryRowContext(ctx,
+        `INSERT INTO users (email, password_hash, name)
+         VALUES ($1, $2, $3)
+         RETURNING id, email, name, created_at`,
+        req.Email, string(hash), req.Name,
+    ).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt)
+
+    return &user, err
+}
+
+func (s *UserStore) Authenticate(ctx context.Context, email, password string) (*model.User, error) {
+    var user model.User
+    err := s.db.QueryRowContext(ctx,
+        `SELECT id, email, password_hash, name, created_at FROM users WHERE email = $1`,
+        email,
+    ).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.CreatedAt)
+
+    if err == sql.ErrNoRows {
+        return nil, ErrNotFound
+    }
+    if err != nil {
+        return nil, err
+    }
+
+    if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+        return nil, ErrInvalidCredentials
+    }
+
+    return &user, nil
+}
+```
+
+### Book Store with Search & Pagination
+
+```go
+// internal/store/book.go (excerpt)
+func (s *BookStore) List(ctx context.Context, f model.BookFilter) ([]model.Book, int, error) {
+    // Build query dynamically
+    where := []string{"1=1"}
+    args := []any{}
+    i := 1
+
+    if f.Search != "" {
+        where = append(where, fmt.Sprintf(
+            "to_tsvector('english', title || ' ' || author) @@ plainto_tsquery($%d)", i))
+        args = append(args, f.Search)
+        i++
+    }
+    if f.Author != "" {
+        where = append(where, fmt.Sprintf("author ILIKE $%d", i))
+        args = append(args, "%"+f.Author+"%")
+        i++
+    }
+    if f.MinPrice > 0 {
+        where = append(where, fmt.Sprintf("price >= $%d", i))
+        args = append(args, f.MinPrice)
+        i++
+    }
+
+    // Count total for pagination
+    countQuery := "SELECT COUNT(*) FROM books WHERE " + strings.Join(where, " AND ")
+    var total int
+    s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)
+
+    // Fetch page
+    limit := f.Limit
+    if limit == 0 { limit = 20 }
+    offset := (f.Page - 1) * limit
+    if offset < 0 { offset = 0 }
+
+    query := fmt.Sprintf(
+        "SELECT id, title, author, description, price, stock, year FROM books WHERE %s ORDER BY id LIMIT $%d OFFSET $%d",
+        strings.Join(where, " AND "), i, i+1,
+    )
+    args = append(args, limit, offset)
+
+    rows, err := s.db.QueryContext(ctx, query, args...)
+    if err != nil {
+        return nil, 0, err
+    }
+    defer rows.Close()
+
+    var books []model.Book
+    for rows.Next() {
+        var b model.Book
+        rows.Scan(&b.ID, &b.Title, &b.Author, &b.Description, &b.Price, &b.Stock, &b.Year)
+        books = append(books, b)
+    }
+
+    return books, total, rows.Err()
+}
+```
+
+### Auth Middleware
+
+```go
+// internal/middleware/auth.go
+package middleware
+
+import (
+    "net/http"
+    "strings"
+
+    myjwt "github.com/yourname/bookstore/pkg/jwt"
+)
+
+type contextKey string
+const UserIDKey contextKey = "user_id"
+
+func Auth(secret string) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            header := r.Header.Get("Authorization")
+            if !strings.HasPrefix(header, "Bearer ") {
+                writeError(w, http.StatusUnauthorized, "missing token")
+                return
+            }
+
+            token := strings.TrimPrefix(header, "Bearer ")
+            claims, err := myjwt.Validate(token, secret)
+            if err != nil {
+                writeError(w, http.StatusUnauthorized, "invalid token")
+                return
+            }
+
+            ctx := context.WithValue(r.Context(), UserIDKey, claims.UserID)
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+```
+
+### Main Server
+
+```go
+// main.go
+func main() {
+    _ = godotenv.Load()
+
+    cfg, err := config.Load()
+    if err != nil {
+        slog.Error("config error", "err", err)
+        os.Exit(1)
+    }
+
+    logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+    slog.SetDefault(logger)
+
+    db, err := sql.Open("postgres", cfg.DatabaseURL)
+    if err != nil {
+        slog.Error("db open error", "err", err)
+        os.Exit(1)
+    }
+    defer db.Close()
+
+    if err := db.Ping(); err != nil {
+        slog.Error("db ping error", "err", err)
+        os.Exit(1)
+    }
+
+    // Stores
+    userStore  := store.NewUserStore(db)
+    bookStore  := store.NewBookStore(db)
+    orderStore := store.NewOrderStore(db)
+
+    // Handlers
+    userHandler  := handler.NewUserHandler(userStore, cfg.JWTSecret)
+    bookHandler  := handler.NewBookHandler(bookStore)
+    orderHandler := handler.NewOrderHandler(orderStore)
+
+    // Router
+    mux := http.NewServeMux()
+
+    // Public routes
+    mux.HandleFunc("POST /api/register", userHandler.Register)
+    mux.HandleFunc("POST /api/login",    userHandler.Login)
+    mux.HandleFunc("GET /api/books",     bookHandler.List)
+    mux.HandleFunc("GET /api/books/{id}", bookHandler.Get)
+
+    // Protected routes — wrap with Auth middleware
+    protected := middleware.Auth(cfg.JWTSecret)
+    mux.Handle("POST /api/books",          protected(http.HandlerFunc(bookHandler.Create)))
+    mux.Handle("PUT /api/books/{id}",      protected(http.HandlerFunc(bookHandler.Update)))
+    mux.Handle("DELETE /api/books/{id}",   protected(http.HandlerFunc(bookHandler.Delete)))
+    mux.Handle("POST /api/orders",         protected(http.HandlerFunc(orderHandler.Create)))
+    mux.Handle("GET /api/orders",          protected(http.HandlerFunc(orderHandler.List)))
+    mux.Handle("GET /api/orders/{id}",     protected(http.HandlerFunc(orderHandler.Get)))
+    mux.Handle("GET /api/profile",         protected(http.HandlerFunc(userHandler.Profile)))
+
+    // Apply global middleware
+    handler := middleware.Chain(mux,
+        middleware.Recovery,
+        middleware.Logging(logger),
+        middleware.CORS,
+    )
+
+    server := &http.Server{
+        Addr:         ":" + cfg.Port,
+        Handler:      handler,
+        ReadTimeout:  cfg.ReadTimeout,
+        WriteTimeout: cfg.WriteTimeout,
+    }
+
+    // Graceful shutdown
+    go func() {
+        slog.Info("server starting", "port", cfg.Port)
+        if err := server.ListenAndServe(); err != http.ErrServerClosed {
+            slog.Error("server error", "err", err)
+            os.Exit(1)
+        }
+    }()
+
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+
+    slog.Info("shutting down...")
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    if err := server.Shutdown(ctx); err != nil {
+        slog.Error("forced shutdown", "err", err)
+    }
+    slog.Info("server stopped")
+}
+```
+
+---
+
+## 6.5 Testing the API
+
+### Manual Testing with curl
+
+```bash
+# Register
+curl -X POST http://localhost:8080/api/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"secret123","name":"Alice"}'
+
+# Login
+TOKEN=$(curl -s -X POST http://localhost:8080/api/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"secret123"}' \
+  | jq -r '.token')
+
+# Create a book (authenticated)
+curl -X POST http://localhost:8080/api/books \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"The Go Programming Language","author":"Donovan","price":39.99,"stock":50,"year":2015}'
+
+# List books with filters
+curl "http://localhost:8080/api/books?q=go&page=1&limit=10"
+
+# Create an order
+curl -X POST http://localhost:8080/api/orders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"book_id":1,"quantity":2}]}'
+```
+
+### Integration Tests
+
+```go
+// handler/book_test.go
+func TestBookAPI(t *testing.T) {
+    db := setupTestDB(t)   // creates a test database
+    defer cleanupDB(t, db)
+
+    store := store.NewBookStore(db)
+    h := NewBookHandler(store)
+
+    mux := http.NewServeMux()
+    mux.Handle("/api/books", h)
+    mux.Handle("/api/books/", h)
+
+    server := httptest.NewServer(mux)
+    defer server.Close()
+
+    client := server.Client()
+
+    t.Run("create and get book", func(t *testing.T) {
+        // Create
+        body := `{"title":"Test Book","author":"Author","price":19.99,"stock":10}`
+        resp, err := client.Post(server.URL+"/api/books",
+            "application/json", strings.NewReader(body))
+        if err != nil {
+            t.Fatal(err)
+        }
+        if resp.StatusCode != http.StatusCreated {
+            t.Fatalf("got %d; want 201", resp.StatusCode)
+        }
+
+        var book model.Book
+        json.NewDecoder(resp.Body).Decode(&book)
+        resp.Body.Close()
+
+        if book.ID == 0 {
+            t.Fatal("expected non-zero ID")
+        }
+
+        // Get
+        resp, _ = client.Get(fmt.Sprintf("%s/api/books/%d", server.URL, book.ID))
+        if resp.StatusCode != http.StatusOK {
+            t.Fatalf("got %d; want 200", resp.StatusCode)
+        }
+    })
+}
+```
+
+---
+
+## Phase 2 Completion Checklist
+
+Before moving to Phase 3, you should be able to:
+
+- [ ] Read and write files using `os`, `io`, and `bufio`
+- [ ] Encode and decode JSON including custom types and streaming
+- [ ] Make HTTP requests with proper timeouts and error handling
+- [ ] Build a REST API with standard `net/http` — no framework
+- [ ] Write and chain middleware (logging, auth, recovery)
+- [ ] Connect to PostgreSQL and run queries safely with parameters
+- [ ] Use transactions for operations that must succeed or fail together
+- [ ] Pass context through your whole call stack (handler → store)
+- [ ] Load configuration from environment variables
+- [ ] Build CLI tools with subcommands using `flag`
+- [ ] Implement graceful shutdown
+- [ ] Write integration tests using `httptest`
+- [ ] Complete the capstone BookStore API
+
+---
+
+## What Comes Next — Phase 3 Preview
+
+In Phase 3 you will build production-grade services:
+
+- **Gin** — a high-performance HTTP router with built-in features
+- **Redis** — caching, sessions, and rate limiting
+- **Background jobs** — processing tasks asynchronously
+- **Docker** — containerizing your application
+- **Clean architecture** — separating concerns properly at scale
+- **Advanced testing** — mocks, test helpers, testcontainers
+
+Everything in Phase 2 is used in Phase 3. You now have the foundation of a working API. Phase 3 makes it production-ready.
+
+---
+
+*Read. Type. Build. Good luck.*
