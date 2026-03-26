@@ -32,6 +32,66 @@ not from "relationships between tables", though those exist too.
 - Every row must be uniquely identifiable (hence primary keys)
 - SQL is declarative — you say *what* you want, the database decides *how* to get it
 
+### Declarative vs Imperative
+
+SQL is **declarative**: you describe the result you want, not the steps to get it. The database engine figures out the most efficient way to execute your request.
+
+Compare filtering data in Python (imperative) vs SQL (declarative):
+
+```python
+# Python — imperative: you tell the computer HOW to filter
+result = []
+for book in books:
+    if book.price > 20:
+        result.append(book)
+```
+
+```sql
+-- SQL — declarative: you tell the database WHAT you want
+SELECT * FROM books WHERE price > 20;
+-- The engine decides whether to scan the table, use an index, etc.
+```
+
+This is a fundamental shift in thinking. You do not write loops in SQL. You describe conditions, and the query planner picks the optimal execution strategy.
+
+### Client-Server Architecture
+
+PostgreSQL uses a **client-server** model:
+
+1. **Client** (your app, psql, pgAdmin) sends a SQL query as text over a network connection
+2. **Server** receives the query and:
+   - **Parses** it (checks syntax, validates table/column names)
+   - **Plans** it (the query planner evaluates different execution strategies and picks the cheapest one)
+   - **Executes** the chosen plan (reads/writes data on disk or in memory)
+3. **Server** returns the **result set** (rows and columns) back to the client
+
+This means:
+- Multiple clients can connect to the same database simultaneously
+- The server handles concurrency, locking, and caching — you do not
+- Network round-trips matter: sending 1000 individual INSERTs is much slower than one INSERT with 1000 rows
+
+### PostgreSQL Object Hierarchy
+
+PostgreSQL organizes objects in a hierarchy:
+
+```
+Cluster (one PostgreSQL server instance)
+ └── Database (e.g., sqlbook, myapp_production)
+      └── Schema (e.g., public — the default schema)
+           └── Table (e.g., books, authors)
+                ├── Columns
+                ├── Indexes
+                ├── Constraints
+                └── Triggers
+```
+
+- A **cluster** is one running PostgreSQL server. It can hold many databases.
+- A **database** is an isolated container. Cross-database queries are not possible in normal SQL.
+- A **schema** is a namespace within a database. The default schema is `public`. Schemas let you organize tables (e.g., `auth.users`, `billing.invoices`) without name collisions.
+- A **table** lives inside a schema and holds your actual data.
+
+When you write `SELECT * FROM books`, PostgreSQL actually resolves it as `SELECT * FROM public.books`.
+
 ### Connecting to PostgreSQL
 
 ```sql
@@ -188,7 +248,7 @@ SELECT '{"name": "Alice"}'::JSONB ? 'name';  -- true
 
 Constraints are database-enforced rules on your data. Always put constraints in
 the database — application-level validation alone is not enough. Applications
-have bugs; the database is the last line of defence.
+have bugs; the database is the last line of defense.
 
 ### NOT NULL
 
@@ -512,6 +572,47 @@ categories ||--o{  products     : "categorizes"
 4. Foreign keys always go on the **many** side of a one-to-many relationship
 5. Many-to-many relationships need a **junction table**
 
+### Worked Example: Books and Authors Schema
+
+Let us walk through designing the schema we use for exercises in this book.
+
+**Step 1 — Identify entities:** We need to store information about *authors* and *books*.
+
+**Step 2 — Identify relationships:** An author *writes* books. A book is *written by* one author.
+
+**Step 3 — Determine cardinality:** One author can write many books. Each book has exactly one author. This is a **one-to-many** relationship.
+
+**Step 4 — Place the foreign key:** The foreign key goes on the "many" side — the `books` table gets an `author_id` column pointing to `authors.id`.
+
+**Step 5 — Draw it:**
+
+```
++--------------------+          +-----------------------------+
+|      authors       |          |           books             |
++--------------------+          +-----------------------------+
+| id          (PK)   |---||--o{-| id              (PK)        |
+| name               |          | author_id       (FK -> authors.id) |
+| birth_year         |          | title                       |
+| country            |          | published_year              |
++--------------------+          | price                       |
+                                | genre                       |
+                                | in_stock                    |
+                                +-----------------------------+
+
+authors  ||--o{  books : "writes"
+
+Reading: One author writes zero or more books.
+         Each book belongs to exactly one author.
+```
+
+### Tools for Drawing ER Diagrams
+
+While pen and paper work fine for small schemas, these tools help with larger designs:
+
+- **dbdiagram.io** — free, browser-based, uses a simple DSL to define tables and relationships. Great for quick diagrams.
+- **draw.io (diagrams.net)** — free, general-purpose diagramming. Has database shape templates.
+- **pgModeler** — open-source, PostgreSQL-specific modeler. Can generate SQL from diagrams and reverse-engineer existing databases.
+
 ---
 
 ## Phase 1 — Practice Schema
@@ -566,11 +667,36 @@ INSERT INTO books (author_id, title, published_year, price, genre, in_stock) VAL
 
 ---
 
----
-
 # Phase 2 — SQL Fundamentals
 
 ## 2.1 SELECT — Reading Data
+
+`SELECT` defines the **shape** of your output — which columns appear and in what form. Each expression in the SELECT list is evaluated once per row in the result. You can think of SELECT as a transformation: it takes rows from the table and produces output rows with the columns you specified.
+
+**Why `SELECT *` is bad in production:**
+- If someone adds or removes a column from the table, your application code may break because it expected a specific column order or count.
+- It pulls every column, including large TEXT or JSONB fields you may not need, wasting memory and network bandwidth.
+- It makes your query's intent unclear — readers cannot tell which columns you actually use.
+
+Always name the columns you need: `SELECT id, title, price FROM books` instead of `SELECT * FROM books`.
+
+### DISTINCT
+
+`DISTINCT` removes duplicate rows from your result set:
+
+```sql
+-- See all unique genres in the books table
+SELECT DISTINCT genre FROM books ORDER BY genre;
+
+-- DISTINCT applies to the entire row, not just the first column
+SELECT DISTINCT genre, in_stock FROM books ORDER BY genre;
+-- Returns each unique (genre, in_stock) combination
+
+-- COUNT(DISTINCT ...) counts unique values
+SELECT COUNT(DISTINCT genre) AS unique_genres FROM books;
+```
+
+### Basic SELECT Examples
 
 ```sql
 -- Select all columns (avoid SELECT * in production — it breaks when columns are added)
@@ -687,13 +813,48 @@ SELECT * FROM books ORDER BY id LIMIT 3 OFFSET 6;  -- page 3 (rows 7-9)
 -- page 1: OFFSET = (1-1) * 3 = 0
 -- page 2: OFFSET = (2-1) * 3 = 3
 -- page 3: OFFSET = (3-1) * 3 = 6
-
--- WARNING: Large OFFSET values are slow.
--- With OFFSET 10000, the database scans 10000 rows just to discard them.
--- For large tables, use keyset pagination instead:
-SELECT * FROM books WHERE id > 10000 ORDER BY id LIMIT 20;
--- This is O(log n) instead of O(n)
 ```
+
+### Why OFFSET Is Slow on Large Tables
+
+`OFFSET n` does not skip directly to row n. The database must **scan and discard** n rows before returning the ones you asked for. This means:
+- `OFFSET 10` scans 10 rows and throws them away — fast enough
+- `OFFSET 100000` scans 100,000 rows and throws them away — O(n) and very slow
+
+The deeper into the result set you paginate, the slower each page gets.
+
+### Keyset Pagination (The Better Way)
+
+Instead of telling the database how many rows to skip, tell it **where you left off**:
+
+```sql
+-- First page: no WHERE filter needed, just LIMIT
+SELECT id, title, price
+FROM books
+ORDER BY id
+LIMIT 20;
+-- Returns rows with id: 1, 2, 3, ... 20
+
+-- Subsequent pages: use the last id from the previous page
+-- If the last row on page 1 had id = 20:
+SELECT id, title, price
+FROM books
+WHERE id > 20
+ORDER BY id
+LIMIT 20;
+-- Returns rows with id: 21, 22, 23, ... 40
+
+-- Next page (last id was 40):
+SELECT id, title, price
+FROM books
+WHERE id > 40
+ORDER BY id
+LIMIT 20;
+```
+
+This is **O(log n)** instead of O(n) because PostgreSQL uses an index on `id` to jump directly to the starting point. The 500th page is just as fast as the 1st page.
+
+**Trade-off:** keyset pagination does not support "jump to page 47" — you can only go forward (or backward with `<`). For most APIs and infinite-scroll UIs, this is fine.
 
 ---
 
@@ -1070,6 +1231,45 @@ ON CONFLICT (user_id) DO UPDATE
 
 ---
 
+## 2.8 Transactions
+
+Transactions group multiple statements into an atomic unit — either all succeed or all fail.
+
+### Basic Transaction
+
+```sql
+BEGIN;
+
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+
+COMMIT;
+```
+
+If anything fails, use `ROLLBACK` to undo all changes:
+
+```sql
+BEGIN;
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+-- oops, something went wrong
+ROLLBACK;  -- nothing changed
+```
+
+### Key Rules
+
+- PostgreSQL auto-commits each statement by default. Without `BEGIN`, each statement is its own transaction.
+- If any statement inside a transaction fails, the transaction enters an error state. You must `ROLLBACK` before running more commands.
+- In application code (Go, Python, etc.), your database library handles `BEGIN`/`COMMIT`/`ROLLBACK` for you — you just call `db.Begin()` and `tx.Commit()`.
+
+### Why This Matters
+
+Never run related INSERT/UPDATE/DELETE statements without a transaction:
+- Transferring money: debit + credit must both succeed
+- Creating an order: insert order + insert line items + deduct inventory
+- If the second statement fails without a transaction, your data is inconsistent
+
+---
+
 ## Phase 2 — Exercises
 
 Using the books/authors schema:
@@ -1084,8 +1284,6 @@ Using the books/authors schema:
 8. Which authors have written books in more than one genre?
 9. Insert a new author and two of their books. Use `RETURNING` to capture the author ID for the book inserts.
 10. Update all book prices: add 8% for books published before 1970.
-
----
 
 ---
 
@@ -1523,11 +1721,50 @@ SELECT
     FIRST_VALUE(price) OVER (PARTITION BY genre ORDER BY price) AS cheapest_in_genre,
     FIRST_VALUE(title) OVER (PARTITION BY genre ORDER BY price) AS cheapest_book_in_genre
 FROM books;
+
+-- Show MOST EXPENSIVE price in each genre using LAST_VALUE
+-- IMPORTANT: You must specify the window frame explicitly!
+SELECT
+    title,
+    genre,
+    price,
+    LAST_VALUE(price) OVER (
+        PARTITION BY genre ORDER BY price
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS most_expensive_in_genre,
+    LAST_VALUE(title) OVER (
+        PARTITION BY genre ORDER BY price
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS most_expensive_book_in_genre
+FROM books;
 ```
+
+**Why LAST_VALUE needs the explicit frame:**
+
+By default, when you use `ORDER BY` in a window function, the window frame is:
+```
+ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+```
+
+This means LAST_VALUE only sees rows from the start of the partition up to the *current* row — so it just returns the current row's value, which is useless.
+
+To make LAST_VALUE see all rows in the partition, you must extend the frame to:
+```
+ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+```
+
+FIRST_VALUE does not have this problem because the first row is always within the default frame.
 
 ---
 
 ## 3.4 Set Operations
+
+### Why Set Operations Exist
+
+Set operations let you combine results from different queries into a single result. Common use cases:
+- **Combining different tables with the same structure:** current orders + archived orders
+- **Building unified search results:** search users by name UNION search users by email
+- **Comparing data sets:** find records in one table but not another (EXCEPT)
 
 ```sql
 -- UNION: combine two result sets, removing duplicates
@@ -1556,6 +1793,12 @@ SELECT name FROM authors WHERE birth_year > 1960;
 
 -- All set operations require the same number of columns with compatible types
 ```
+
+### Performance Note
+
+- **UNION** deduplicates the combined results, which requires sorting or hashing all rows. This is expensive on large result sets.
+- **UNION ALL** simply concatenates the results — no sorting, no comparison. It is significantly faster.
+- **Rule of thumb:** When you know the two queries cannot produce duplicate rows (e.g., they query different tables, or have mutually exclusive WHERE clauses), always use `UNION ALL`.
 
 ---
 
@@ -1729,6 +1972,14 @@ SELECT LEAST(3, 7, 2, 8, 1);     -- 1
 
 ---
 
+> **Tip:** Use `EXPLAIN ANALYZE` to see how PostgreSQL executes your query. We cover this in depth in Book 2, but when a query feels slow, start here:
+> ```sql
+> EXPLAIN ANALYZE SELECT * FROM books WHERE price > 20;
+> ```
+> This shows the execution plan, row estimates, and actual timing.
+
+---
+
 ## Phase 3 — Exercises
 
 1. Find the 3 most expensive books in each genre using window functions (not subqueries).
@@ -1739,8 +1990,6 @@ SELECT LEAST(3, 7, 2, 8, 1);     -- 1
 6. Classify each book using CASE: 'Classic' (before 1980), 'Modern' (1980–2010), 'Contemporary' (after 2010).
 7. Write a query returning each author with: total books, avg price, and percentage their avg price is above or below the overall average.
 8. Using UNION, write a single query that returns authors whose name contains "Garcia" AND books whose title contains "Harry", with a column labelling which type each result is.
-
----
 
 ---
 
@@ -1812,6 +2061,33 @@ CREATE TABLE products (
     is_active BOOLEAN NOT NULL DEFAULT true
 );
 ```
+
+### Trade-offs of Soft Deletes
+
+Soft deletes are not free. Consider these costs before choosing them:
+
+**1. Every query must remember to filter.**
+Every `SELECT` against the table must include `WHERE deleted_at IS NULL` (or use a view). If even one query forgets this filter, your application shows "deleted" data to users. This is a common source of bugs.
+
+**2. Unique constraints become problematic.**
+If you have `UNIQUE(email)` and soft-delete a user, their email is still in the table. A new user cannot register with that same email. The fix is a **partial unique index**:
+
+```sql
+-- Only enforce uniqueness among non-deleted rows
+CREATE UNIQUE INDEX idx_users_email_active
+ON users (email)
+WHERE deleted_at IS NULL;
+```
+
+This allows multiple soft-deleted rows with the same email, but only one active row.
+
+**3. Table size grows forever.**
+Soft-deleted rows accumulate. On high-volume tables, this can significantly increase storage and slow down queries that scan the table.
+
+**When hard deletes are better:**
+- **GDPR / data privacy regulations** — you may be legally required to actually delete personal data, not just hide it.
+- **Ephemeral data** — session tokens, temporary codes, or cache entries do not need to be preserved.
+- **High-volume transient data** — log entries, analytics events, or message queues where old data has no value.
 
 ---
 
@@ -2028,6 +2304,23 @@ migrations/
 
 Always write a `down` migration. Always test rollbacks.
 
+### Migration Tools
+
+Common tools for managing migrations:
+
+- **golang-migrate** — language-agnostic CLI, works with many databases. Popular in Go projects.
+- **goose** — Go-native, supports SQL and Go-based migrations.
+- **dbmate** — lightweight, language-agnostic, simple CLI.
+- **flyway** — Java-based, widely used in enterprise. Has a free community edition.
+
+### Up and Down Files
+
+Each migration has two files:
+- **Up file** (`000001_create_users.up.sql`): contains the forward change (CREATE TABLE, ADD COLUMN, etc.)
+- **Down file** (`000001_create_users.down.sql`): contains the reverse change (DROP TABLE, DROP COLUMN, etc.)
+
+The migration tool tracks which migrations have been applied in a `schema_migrations` table. Running `migrate up` applies pending migrations in order. Running `migrate down` rolls back the most recent migration.
+
 ### Safe vs Dangerous Operations
 
 ```sql
@@ -2060,6 +2353,12 @@ UPDATE users SET phone = '' WHERE phone IS NULL;
 ALTER TABLE users ALTER COLUMN phone SET NOT NULL;
 ```
 
+### Note on CREATE INDEX CONCURRENTLY
+
+`CREATE INDEX CONCURRENTLY` cannot run inside a transaction. If your migration tool wraps each migration in a transaction (most do by default), the concurrent index creation will fail. Solutions:
+- Use your migration tool's "no transaction" mode for that specific migration (e.g., golang-migrate supports `-- +migrate NoTransaction`)
+- Create the index in a separate migration file that runs outside a transaction
+
 ---
 
 ## 4.8 Common Schema Patterns Reference
@@ -2079,6 +2378,10 @@ CREATE TABLE users (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
+
+**When to use a CHECK constraint vs a separate roles table:**
+- **CHECK constraint** (as above): use when the set of roles is small, fixed, and unlikely to change. Simple, no extra join needed.
+- **Separate roles table**: use when roles need additional metadata (description, permissions), when roles change frequently, or when users can have multiple roles (many-to-many relationship via a `user_roles` junction table).
 
 ### Products with Variants
 
@@ -2102,6 +2405,10 @@ CREATE TABLE product_variants (
 );
 ```
 
+**Why a separate variants table:** A product like "T-Shirt" may come in 3 sizes and 4 colors = 12 variants, each with its own price, stock level, and SKU. Storing these as columns on the product (e.g., `stock_small`, `stock_medium`, `stock_large`) does not scale and makes queries painful.
+
+**Why the composite unique constraint:** `UNIQUE (product_id, size, color)` ensures you cannot accidentally create two "Blue, Large" variants for the same product. This is a business rule enforced at the database level.
+
 ### Social Graph (Followers)
 
 ```sql
@@ -2119,6 +2426,50 @@ SELECT u.name FROM follows f JOIN users u ON u.id = f.follower_id WHERE f.follow
 -- Get who user 42 is following
 SELECT u.name FROM follows f JOIN users u ON u.id = f.followed_id WHERE f.follower_id = 42;
 ```
+
+**Important: index both sides.** The composite primary key `(follower_id, followed_id)` creates an index that is efficient for queries starting with `follower_id` (e.g., "who does user 42 follow?"). But queries starting with `followed_id` (e.g., "who follows user 42?") cannot use this index efficiently. You need a separate index:
+
+```sql
+CREATE INDEX idx_follows_followed_id ON follows (followed_id);
+```
+
+Without this index, "get followers of user X" requires a full table scan.
+
+---
+
+## 4.9 VIEWs
+
+A VIEW is a saved query that you can reference like a table. It does not store any data — every time you query a view, PostgreSQL runs the underlying query.
+
+```sql
+-- Basic syntax
+CREATE VIEW active_products AS
+SELECT id, name, price
+FROM products
+WHERE deleted_at IS NULL;
+
+-- Now you can query it like a table
+SELECT * FROM active_products WHERE price > 10;
+
+-- Drop a view
+DROP VIEW active_products;
+
+-- Replace a view (change its definition without dropping)
+CREATE OR REPLACE VIEW active_products AS
+SELECT id, name, price, created_at
+FROM products
+WHERE deleted_at IS NULL;
+```
+
+### When to Use VIEWs
+
+- **Simplify repetitive queries:** We already used a view in the soft deletes section (`CREATE VIEW active_products AS SELECT * FROM products WHERE deleted_at IS NULL`). Instead of adding `WHERE deleted_at IS NULL` to every query, you query `active_products`.
+- **Abstract complex joins:** If multiple parts of your application need the same 4-table join, wrap it in a view.
+- **Restrict access:** Give a user access to a view that only exposes certain columns, not the full table.
+
+### VIEWs Do Not Store Data
+
+A view is just a named query. It has no storage overhead. When you `SELECT * FROM active_products`, PostgreSQL rewrites it as `SELECT * FROM products WHERE deleted_at IS NULL` and executes that. If you need a view that stores data for performance, look into **materialized views** (covered in Book 2).
 
 ---
 
@@ -2142,8 +2493,6 @@ Write:
 3. A query showing a specific student's progress: course name, total lessons, completed lessons, percentage complete
 4. Monthly revenue per instructor for the past 6 months
 5. A trigger that records enrollment status changes to a history table
-
----
 
 ---
 
